@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import LightningEffect from "./LightningEffect";
 import FollowsModal from "./FollowsModal";
+import SettingsModal from "./SettingsModal";
+import DebugModal from "./DebugModal";
 import { useNostr } from "../hooks/useNostr";
 import { showToast } from "../App";
 import { init, launchModal, requestProvider, onConnected, onDisconnected } from "@getalby/bitcoin-connect-react";
@@ -12,12 +14,33 @@ export default function LightningApp() {
   const [lightningCount, setLightningCount] = useState(0);
   const [activeEffects, setActiveEffects] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
   const [isActionMenuOpen, setIsActionMenuOpen] = useState(false);
   const [isWalletConnected, setIsWalletConnected] = useState(false);
   const [bitcoinProvider, setBitcoinProvider] = useState(null);
+  const [settings, setSettings] = useState({
+    defaultZapAmount: 1000, // msats
+    defaultZapMessage: "Just Zap It! ⚡",
+    zapFriendsOfFriends: false
+  });
+  const [zapHistory, setZapHistory] = useState([]);
   const { follows, getRandomFollow, isLoadingFollows, disconnect, ndk } = useNostr();
   const effectCounter = useRef(0);
   const containerRef = useRef(null);
+
+  // Load settings from localStorage
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('justzapit_settings');
+    if (savedSettings) {
+      try {
+        const parsedSettings = JSON.parse(savedSettings);
+        setSettings(prev => ({ ...prev, ...parsedSettings }));
+      } catch (error) {
+        console.error('Failed to parse saved settings:', error);
+      }
+    }
+  }, []);
 
   // Initialize Bitcoin Connect
   useEffect(() => {
@@ -125,7 +148,7 @@ export default function LightningApp() {
       
       const zapRequestEvent = new NDKEvent(ndk, {
         kind: 9734,
-        content: "Just Zap It! ⚡",
+        content: settings.defaultZapMessage,
         pubkey: senderPubkey,
         created_at: Math.floor(Date.now() / 1000),
         tags: [
@@ -151,10 +174,12 @@ export default function LightningApp() {
   const getLnurlPayEndpoint = async (recipientNpub) => {
     console.log('🔍 Getting LNURL pay endpoint for:', recipientNpub);
     
+    let lnurl, cachedFollow;
+    
     try {
       // First, try to get LNURL from cached follow data
       console.log('🔍 Looking for cached follow data...');
-      const cachedFollow = follows.find(follow => follow.npub === recipientNpub);
+      cachedFollow = follows.find(follow => follow.npub === recipientNpub);
       
       if (cachedFollow) {
         console.log('✅ Found cached follow data:', cachedFollow);
@@ -208,7 +233,7 @@ export default function LightningApp() {
       });
 
       // Check for LNURL in profile
-      const lnurl = recipientUser.profile?.lud06 || recipientUser.profile?.lud16;
+      lnurl = recipientUser.profile?.lud06 || recipientUser.profile?.lud16;
       
       if (!lnurl) {
         console.log('❌ No LNURL found in profile, trying direct profile fetch...');
@@ -257,6 +282,14 @@ export default function LightningApp() {
       
     } catch (error) {
       console.error('❌ Failed to get LNURL pay endpoint:', error);
+      // Include LNURL debugging info in the error
+      const debugInfo = {
+        lnurl: lnurl || 'Not found',
+        recipientNpub,
+        cachedFollow: cachedFollow ? 'Found' : 'Not found',
+        cachedLnurl: cachedFollow?.lud06 || cachedFollow?.lud16 || 'Not found'
+      };
+      error.debugInfo = debugInfo;
       throw error;
     }
   };
@@ -264,9 +297,9 @@ export default function LightningApp() {
   const processLnurl = async (lnurl) => {
     console.log('🔗 Processing LNURL:', lnurl);
     
+    let lnurlUrl;
+    
     try {
-      let lnurlUrl;
-      
       // Check if it's a lightning address (lud16) - contains @ symbol
       if (lnurl.includes('@')) {
         console.log('⚡ Detected lightning address (lud16):', lnurl);
@@ -325,12 +358,22 @@ export default function LightningApp() {
       
     } catch (error) {
       console.error('❌ Failed to process LNURL:', error);
+      // Include LNURL processing debugging info
+      const debugInfo = {
+        originalLnurl: lnurl,
+        lnurlUrl: lnurlUrl || 'Not generated',
+        isLightningAddress: lnurl.includes('@'),
+        domain: lnurl.includes('@') ? lnurl.split('@')[1] : 'N/A'
+      };
+      error.debugInfo = debugInfo;
       throw error;
     }
   };
 
   const sendZapRequest = async (zapRequestEvent, lnurlData) => {
     console.log('📤 Sending zap request to LNURL callback...');
+    
+    let callbackUrl, encodedEvent;
     
     try {
       // Convert NDKEvent to plain object for JSON encoding
@@ -347,15 +390,20 @@ export default function LightningApp() {
       console.log('📋 Event data for callback:', eventData);
       
       // Encode the zap request event
-      const encodedEvent = encodeURIComponent(JSON.stringify(eventData));
+      encodedEvent = encodeURIComponent(JSON.stringify(eventData));
       
       // Build callback URL with parameters
-      const callbackUrl = `${lnurlData.callback}?amount=${zapRequestEvent.tags.find(t => t[0] === 'amount')[1]}&nostr=${encodedEvent}`;
+      callbackUrl = `${lnurlData.callback}?amount=${zapRequestEvent.tags.find(t => t[0] === 'amount')[1]}&nostr=${encodedEvent}`;
       
       console.log('🔗 Callback URL:', callbackUrl);
 
       // Send the request
       const response = await fetch(callbackUrl);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const result = await response.json();
 
       console.log('📥 LNURL callback response:', result);
@@ -367,6 +415,14 @@ export default function LightningApp() {
       return result.pr; // Return the bolt11 invoice
     } catch (error) {
       console.error('❌ Failed to send zap request:', error);
+      // Include callback debugging info
+      const debugInfo = {
+        callbackUrl: callbackUrl || 'Not generated',
+        lnurlCallback: lnurlData?.callback || 'Not found',
+        amount: zapRequestEvent.tags.find(t => t[0] === 'amount')?.[1] || 'Not found',
+        encodedEvent: encodedEvent ? 'Generated' : 'Not generated'
+      };
+      error.debugInfo = debugInfo;
       throw error;
     }
   };
@@ -389,18 +445,27 @@ export default function LightningApp() {
       return result;
     } catch (error) {
       console.error('❌ Payment failed:', error);
+      // Include payment debugging info
+      const debugInfo = {
+        invoice: invoice ? 'Present' : 'Not provided',
+        invoiceLength: invoice?.length || 0,
+        hasBitcoinProvider: !!bitcoinProvider,
+        providerType: bitcoinProvider?.constructor?.name || 'Unknown'
+      };
+      error.debugInfo = debugInfo;
       throw error;
     }
   };
 
-  const performNip57Zap = async (recipientNpub, amountMsats = 1000) => {
+  const performNip57Zap = async (recipientNpub, amountMsats = null) => {
+    const zapAmount = amountMsats || settings.defaultZapAmount;
     console.log('⚡ Starting NIP-57 zap process...');
     console.log('🎯 Target:', recipientNpub);
-    console.log('💰 Amount:', amountMsats, 'msats');
+    console.log('💰 Amount:', zapAmount, 'msats');
 
     try {
       // Step 1: Create zap request event
-      const zapRequestEvent = await createZapRequest(recipientNpub, amountMsats);
+      const zapRequestEvent = await createZapRequest(recipientNpub, zapAmount);
       
       // Step 2: Get LNURL pay endpoint
       const lnurlData = await getLnurlPayEndpoint(recipientNpub);
@@ -479,17 +544,17 @@ export default function LightningApp() {
       const recipientNpub = randomFollow.npub;
       if (!recipientNpub) {
         console.log('❌ No npub found for follow:', randomFollow);
-        showToast(`Failed to zap ${displayName} - no npub found`);
+        addZapLog(displayName, settings.defaultZapAmount, 'failed', 'No npub found');
         return;
       }
       
       console.log('✅ Got recipient npub:', recipientNpub);
       
-      // Perform NIP-57 zap in the background (1000 msats = 1 sat)
-      performNip57Zap(recipientNpub, 1000)
+      // Perform NIP-57 zap in the background using settings
+      performNip57Zap(recipientNpub)
         .then((result) => {
           console.log('✅ NIP-57 zap successful:', result);
-          showToast(`Successfully zapped ${displayName}! ⚡`);
+          addZapLog(displayName, settings.defaultZapAmount, 'success');
         })
         .catch((error) => {
           console.error('❌ NIP-57 zap failed:', error);
@@ -498,7 +563,7 @@ export default function LightningApp() {
             stack: error.stack,
             name: error.name
           });
-          showToast(`Failed to zap ${displayName}: ${error.message}`);
+          addZapLog(displayName, settings.defaultZapAmount, 'failed', error.message, error.debugInfo);
         });
     } else {
       console.log('🎭 Demo mode - no wallet connected or provider not ready');
@@ -506,12 +571,41 @@ export default function LightningApp() {
       
       // Show demo toast immediately
       showToast(`Demo mode: Would zap ${displayName}! ⚡`);
+      addZapLog(displayName, settings.defaultZapAmount, 'demo', 'Demo mode - no wallet connected');
     }
   };
 
   const handleLogout = () => {
     disconnect();
     window.location.reload();
+  };
+
+  const addZapLog = (recipient, amount, status, error = null, debugInfo = null) => {
+    const timestamp = new Date().toLocaleTimeString('en-US', { 
+      hour12: true, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit' 
+    });
+    
+    const log = {
+      id: Date.now(),
+      timestamp,
+      recipient,
+      amount,
+      status, // 'success' or 'failed'
+      error,
+      debugInfo
+    };
+    
+    setZapHistory(prev => [log, ...prev.slice(0, 49)]); // Keep last 50 logs
+  };
+
+  const handleSettingsChange = (newSettings) => {
+    setSettings(newSettings);
+    // Save to localStorage
+    localStorage.setItem('justzapit_settings', JSON.stringify(newSettings));
+    showToast("Settings saved!");
   };
 
   const handleWalletClick = () => {
@@ -564,6 +658,35 @@ export default function LightningApp() {
               exit={{ opacity: 0, scale: 0.8, y: -5, x: 10 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
             >
+              <motion.button
+                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/10 rounded flex items-center gap-2 transition-all"
+                onClick={() => {
+                  setIsSettingsModalOpen(true);
+                  setIsActionMenuOpen(false);
+                }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Settings
+              </motion.button>
+              <motion.button
+                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/10 rounded flex items-center gap-2 transition-all"
+                onClick={() => {
+                  setIsDebugModalOpen(true);
+                  setIsActionMenuOpen(false);
+                }}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                Debug
+              </motion.button>
               <motion.button
                 className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/10 rounded flex items-center gap-2 transition-all"
                 onClick={handleLogout}
@@ -720,6 +843,21 @@ export default function LightningApp() {
         onClose={() => setIsModalOpen(false)}
         follows={follows}
         isLoadingFollows={isLoadingFollows}
+      />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        settings={settings}
+        onSettingsChange={handleSettingsChange}
+      />
+
+      {/* Debug Modal */}
+      <DebugModal
+        isOpen={isDebugModalOpen}
+        onClose={() => setIsDebugModalOpen(false)}
+        zapHistory={zapHistory}
       />
     </div>
   );
