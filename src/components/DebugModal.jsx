@@ -5,7 +5,10 @@ const DebugModal = ({ isOpen, onClose, zapHistory }) => {
   const getStatusColor = (status) => {
     switch (status) {
       case 'success':
+      case 'confirmed':
         return 'text-green-400';
+      case 'pending':
+        return 'text-yellow-400';
       case 'failed':
         return 'text-red-400';
       case 'demo':
@@ -19,6 +22,10 @@ const DebugModal = ({ isOpen, onClose, zapHistory }) => {
     switch (status) {
       case 'success':
         return '✅';
+      case 'confirmed':
+        return '✅';
+      case 'pending':
+        return '⏳';
       case 'failed':
         return '❌';
       case 'demo':
@@ -92,17 +99,22 @@ const DebugModal = ({ isOpen, onClose, zapHistory }) => {
                         
                         <div className="text-gray-400 text-sm mb-2">
                           Amount: {Math.round(log.amount / 1000)} {Math.round(log.amount / 1000) === 1 ? 'sat' : 'sats'}
+                          {log.debugInfo?.lightningAddress && (
+                            <span className="ml-2 text-blue-400">
+                              • {log.debugInfo.lightningAddress}
+                            </span>
+                          )}
                         </div>
+                        
+
                         
                         {log.error && (
                           <div className="bg-red-900/20 border border-red-500/30 rounded p-3">
-                            <div className="text-red-400 text-sm font-medium mb-1">Error:</div>
                             <div className="text-red-300 text-sm font-mono break-words mb-2">
                               {log.error}
                             </div>
                             {log.debugInfo && (
                               <div className="border-t border-red-500/30 pt-2">
-                                <div className="text-red-400 text-xs font-medium mb-1">Debug Info:</div>
                                 <div className="text-red-300 text-xs font-mono space-y-1">
                                   {Object.entries(log.debugInfo).map(([key, value]) => (
                                     <div key={key} className="flex">
@@ -113,6 +125,15 @@ const DebugModal = ({ isOpen, onClose, zapHistory }) => {
                                 </div>
                               </div>
                             )}
+                          </div>
+                        )}
+                        
+                        {!log.error && log.debugInfo?.hasPreimage !== undefined && (
+                          <div className="bg-green-900/20 border border-green-500/30 rounded p-3">
+                            <div className="text-green-300 text-xs font-mono">
+                              <span className="text-green-400 mr-2">hasPreimage:</span>
+                              <span>{log.debugInfo.hasPreimage ? 'true' : 'false'}</span>
+                            </div>
                           </div>
                         )}
                       </div>

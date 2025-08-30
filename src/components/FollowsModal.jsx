@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-hot-toast';
 
 const FollowsModal = ({ isOpen, onClose, follows, isLoadingFollows }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
   const formatNpub = (npub) => {
     if (!npub) return '';
     if (npub.length <= 22) return npub;
@@ -18,6 +20,24 @@ const FollowsModal = ({ isOpen, onClose, follows, isLoadingFollows }) => {
     }
     return formatNpub(follow.npub);
   };
+
+  // Filter follows based on search term
+  const filteredFollows = useMemo(() => {
+    if (!searchTerm.trim()) return follows;
+    
+    const term = searchTerm.toLowerCase();
+    return follows.filter(follow => {
+      const displayName = getDisplayName(follow).toLowerCase();
+      const npub = (follow.npub || '').toLowerCase();
+      const name = (follow.name || '').toLowerCase();
+      const about = (follow.about || '').toLowerCase();
+      
+      return displayName.includes(term) || 
+             npub.includes(term) || 
+             name.includes(term) || 
+             about.includes(term);
+    });
+  }, [follows, searchTerm]);
 
   const handleFollowClick = async (follow) => {
     if (!follow.npub) {
@@ -117,19 +137,39 @@ const FollowsModal = ({ isOpen, onClose, follows, isLoadingFollows }) => {
             </button>
           </div>
 
+          {/* Search Bar */}
+          <div className="mb-4">
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search follows..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full px-4 py-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-400/50 focus:border-yellow-400/50 transition-all"
+              />
+              <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
           {/* Content */}
           <div className="overflow-y-auto max-h-[60vh]">
             {isLoadingFollows ? (
               <div className="text-center py-8">
                 <div className="text-yellow-400 text-lg">Loading follows...</div>
               </div>
-            ) : follows.length === 0 ? (
+            ) : filteredFollows.length === 0 ? (
               <div className="text-center py-8">
-                <div className="text-gray-400 text-lg">No follows found</div>
+                <div className="text-gray-400 text-lg">
+                  {searchTerm.trim() ? `No follows found matching "${searchTerm}"` : 'No follows found'}
+                </div>
               </div>
             ) : (
               <div className="space-y-2">
-                {follows.map((follow, index) => {
+                {filteredFollows.map((follow, index) => {
                   const displayName = getDisplayName(follow);
                   if (!displayName) return null; // Skip if no display name
                   
@@ -164,7 +204,15 @@ const FollowsModal = ({ isOpen, onClose, follows, isLoadingFollows }) => {
           {/* Footer */}
           <div className="mt-4 pt-4 border-t border-white/10">
             <div className="text-gray-400 text-sm text-center">
-              Total: {follows.length} follows
+              {searchTerm.trim() ? (
+                <>
+                  Showing {filteredFollows.length} of {follows.length} follows
+                </>
+              ) : (
+                <>
+                  Total: {follows.length} follows
+                </>
+              )}
             </div>
           </div>
         </motion.div>

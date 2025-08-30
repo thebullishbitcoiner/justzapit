@@ -10,6 +10,19 @@ import { init, launchModal, requestProvider, onConnected, onDisconnected } from 
 import { AnimatePresence } from "framer-motion";
 import packageJson from "../../package.json";
 
+/**
+ * LightningApp Component
+ * 
+ * This component implements zapping using @getalby/lightning-tools:
+ * 
+ * Lightning-tools provides a simpler and more direct approach to zapping:
+ * 1. Create LightningAddress instance with the recipient's lightning address
+ * 2. Fetch LNURL data to get zap capabilities
+ * 3. Use the zap() method to send zaps with Nostr integration
+ * 4. Automatic handling of NIP-57 zap requests and LUD-06/16 protocols
+ * 5. Built-in support for comments, relays, and event targeting
+ */
+
 export default function LightningApp() {
   const [lightningCount, setLightningCount] = useState(0);
   const [activeEffects, setActiveEffects] = useState([]);
@@ -21,11 +34,23 @@ export default function LightningApp() {
   const [bitcoinProvider, setBitcoinProvider] = useState(null);
   const [settings, setSettings] = useState({
     defaultZapAmount: 1000, // msats
-    defaultZapMessage: "Just Zap It! ⚡",
+    defaultZapMessage: "JustZapIt! ⚡",
     zapFriendsOfFriends: false
   });
   const [zapHistory, setZapHistory] = useState([]);
-  const { follows, getRandomFollow, isLoadingFollows, disconnect, ndk } = useNostr();
+  const [pendingZaps, setPendingZaps] = useState(new Map()); // Track pending zaps waiting for receipts
+  const { follows, getRandomFollow, isLoadingFollows, disconnect, ndk, isNdkReady } = useNostr();
+  
+  // Debug NDK state
+  useEffect(() => {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] NDK state in LightningApp:`, { 
+      hasNdk: !!ndk, 
+      connected: ndk?.connected,
+      relays: ndk?.relays?.size,
+      relayUrls: ndk?.relays ? Array.from(ndk.relays.values()).map(r => r.url) : []
+    });
+  }, [ndk]);
   const effectCounter = useRef(0);
   const containerRef = useRef(null);
 
@@ -46,41 +71,45 @@ export default function LightningApp() {
   useEffect(() => {
     // Initialize bitcoin-connect
     init({
-      appName: 'Just Zap It',
+      appName: 'JustZapIt',
     });
 
     // Set up event listeners
     onConnected((provider) => {
-      console.log('🔗 Bitcoin Connect: Wallet connected!');
-      console.log('📦 Connected provider details:', {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] Bitcoin Connect: Wallet connected!`);
+      console.log(`[${timestamp}] Connected provider details:`, {
         providerType: provider?.constructor?.name,
         availableMethods: Object.keys(provider || {}),
         hasSendPayment: !!(provider && provider.sendPayment)
       });
       
       setIsWalletConnected(true);
-      console.log('✅ Wallet state updated: isWalletConnected = true');
+      console.log(`[${timestamp}] Wallet state updated: isWalletConnected = true`);
       
       // Setup NDK wallet for zapping
       setupNdkWallet(provider);
     });
 
     onDisconnected(() => {
-      console.log('🔌 Bitcoin Connect: Wallet disconnected');
-      console.log('❌ Wallet disconnected');
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] Bitcoin Connect: Wallet disconnected`);
+      console.log(`[${timestamp}] Wallet disconnected`);
       // Clean up NDK wallet
       setBitcoinProvider(null);
-      console.log('🧹 Zapper cleaned up');
+      console.log(`[${timestamp}] Zapper cleaned up`);
     });
 
     return () => {
-      console.log('🧹 Cleaning up Bitcoin Connect event listeners');
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] Cleaning up Bitcoin Connect event listeners`);
     };
   }, [ndk]);
 
   const setupNdkWallet = async (provider) => {
-    console.log('🔧 Setting up wallet for NIP-57 zapping...');
-    console.log('📦 Provider details:', {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] Setting up wallet for Lightning-tools zapping...`);
+    console.log(`[${timestamp}] Provider details:`, {
       hasProvider: !!provider,
       providerType: provider?.constructor?.name,
       availableMethods: Object.keys(provider || {})
@@ -88,16 +117,20 @@ export default function LightningApp() {
 
     try {
       if (!ndk) {
-        console.log('❌ NDK not available for wallet setup');
+        console.log(`[${timestamp}] NDK not available for wallet setup`);
         return;
       }
 
-      console.log('✅ NDK available, storing Bitcoin Connect provider');
+      console.log(`[${timestamp}] NDK available, storing Bitcoin Connect provider`);
       setBitcoinProvider(provider);
 
+      // Lightning-tools uses Bitcoin Connect provider directly for payments
+      // No additional wallet configuration needed
+      console.log(`[${timestamp}] Bitcoin Connect provider ready for Lightning-tools zapping`);
+
     } catch (error) {
-      console.error('❌ Failed to setup wallet for zapping:', error);
-      console.error('🔍 Error details:', {
+      console.error(`[${timestamp}] Failed to setup wallet for zapping:`, error);
+      console.error(`[${timestamp}] Error details:`, {
         message: error.message,
         stack: error.stack,
         name: error.name
@@ -106,381 +139,138 @@ export default function LightningApp() {
     }
   };
 
-  // NIP-57 Zapping Implementation
-  const createZapRequest = async (recipientNpub, amountMsats = 1000) => {
-    console.log('📝 Creating NIP-57 zap request...');
-    console.log('🎯 Recipient:', recipientNpub);
-    console.log('💰 Amount (msats):', amountMsats);
+  // Lightning-tools zap implementation
+  const createLightningZapper = async (lightningAddress, amountMsats = 1000) => {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] Creating Lightning-tools zapper...`);
+    console.log(`[${timestamp}] Lightning Address:`, lightningAddress);
+    console.log(`[${timestamp}] Amount (msats):`, amountMsats);
 
     try {
-      // Get user's signer for signing the zap request
-      const signer = ndk.signer;
-      if (!signer) {
-        throw new Error('No signer available');
+      // Import LightningAddress from lightning-tools
+      const { LightningAddress } = await import('@getalby/lightning-tools/lnurl');
+      
+      if (!lightningAddress) {
+        throw new Error('No lightning address provided');
       }
 
-      console.log('🔧 Signer object:', signer);
-      console.log('🔍 Signer methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(signer)));
-
-      // Get user's pubkey - try different methods
-      const user = await signer.user();
-      console.log('👤 User object:', user);
-      console.log('🔍 User object keys:', Object.keys(user));
-      console.log('🔍 User object prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(user)));
+      console.log(`[${timestamp}] Using lightning address:`, lightningAddress);
       
-      let senderPubkey;
-      if (typeof user.hexpubkey === 'function') {
-        senderPubkey = user.hexpubkey();
-      } else if (user.pubkey) {
-        senderPubkey = user.pubkey;
-      } else if (user.hexpubkey) {
-        senderPubkey = user.hexpubkey;
-      } else {
-        // Try to get pubkey from signer directly
-        console.log('🔄 Trying to get pubkey from signer directly...');
-        senderPubkey = await signer.getPublicKey();
-      }
-
-      console.log('👤 Sender pubkey:', senderPubkey);
-
-      // Create zap request event using NDKEvent (NDK v2 approach)
-      const { NDKEvent } = await import('@nostr-dev-kit/ndk');
+      // Create LightningAddress instance
+      const ln = new LightningAddress(lightningAddress);
       
-      const zapRequestEvent = new NDKEvent(ndk, {
-        kind: 9734,
-        content: settings.defaultZapMessage,
-        pubkey: senderPubkey,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [
-          ["relays", "wss://relay.primal.net", "wss://relay.damus.io"],
-          ["amount", amountMsats.toString()],
-          ["p", recipientNpub],
-        ]
+      // Fetch LNURL data to get zap capabilities
+      console.log(`[${timestamp}] Fetching LNURL data...`);
+      await ln.fetch();
+      
+      console.log(`[${timestamp}] LNURL data fetched:`, {
+        hasLnurlpData: !!ln.lnurlpData,
+        hasKeysendData: !!ln.keysendData,
+        callback: ln.lnurlpData?.callback
       });
 
-      console.log('📋 Zap request event created:', zapRequestEvent);
+      // Create target user object
+      const targetUser = {
+        displayName: lightningAddress.split('@')[0] // Use username part of lightning address
+      };
 
-      // Sign the event using NDK's built-in signing
-      await zapRequestEvent.sign();
-      console.log('✍️ Zap request signed:', zapRequestEvent.id);
-
-      return zapRequestEvent;
+      return {
+        ln,
+        targetUser,
+        lightningAddress
+      };
     } catch (error) {
-      console.error('❌ Failed to create zap request:', error);
+      console.error(`[${timestamp}] Failed to create Lightning-tools zapper:`, error);
       throw error;
     }
   };
 
-  const getLnurlPayEndpoint = async (recipientNpub) => {
-    console.log('🔍 Getting LNURL pay endpoint for:', recipientNpub);
-    
-    let lnurl, cachedFollow;
-    
-    try {
-      // First, try to get LNURL from cached follow data
-      console.log('🔍 Looking for cached follow data...');
-      cachedFollow = follows.find(follow => follow.npub === recipientNpub);
-      
-      if (cachedFollow) {
-        console.log('✅ Found cached follow data:', cachedFollow);
-        const cachedLnurl = cachedFollow.lud06 || cachedFollow.lud16;
-        
-        if (cachedLnurl) {
-          console.log('🔗 Found LNURL in cached data:', cachedLnurl);
-          return await processLnurl(cachedLnurl);
-        } else {
-          console.log('❌ No LNURL found in cached data');
-        }
-      } else {
-        console.log('❌ No cached follow data found for npub:', recipientNpub);
-      }
 
-      // Fallback: Try to fetch profile from relays
-      console.log('🔄 Fallback: Attempting to fetch profile from relays...');
-      
-      // Ensure NDK is connected
-      console.log('🔗 Checking NDK connection...');
-      if (!ndk) {
-        throw new Error('NDK not available');
-      }
-      
-      // Get recipient's profile using the same approach as follows
-      console.log('📡 Creating NDK user object for recipient...');
-      const recipientUser = ndk.getUser({ npub: recipientNpub });
-      console.log('👤 Created NDK user object:', recipientUser);
-      console.log('🔍 NDK user properties:', {
-        hasNdk: !!recipientUser.ndk,
-        hasProfile: !!recipientUser.profile,
-        npub: recipientUser.npub,
-        pubkey: recipientUser.pubkey
-      });
-      
-      // Try to fetch profile
-      console.log('📡 Attempting to fetch profile...');
-      await recipientUser.fetchProfile();
-      console.log('✅ Profile fetch completed');
-      
-      console.log('👤 Recipient profile object:', recipientUser.profile);
-      console.log('🔍 Profile keys:', recipientUser.profile ? Object.keys(recipientUser.profile) : 'No profile');
-      
-      console.log('👤 Recipient profile details:', {
-        displayName: recipientUser.profile?.displayName,
-        name: recipientUser.profile?.name,
-        lud06: recipientUser.profile?.lud06,
-        lud16: recipientUser.profile?.lud16,
-        hasProfile: !!recipientUser.profile,
-        profileType: typeof recipientUser.profile
-      });
 
-      // Check for LNURL in profile
-      lnurl = recipientUser.profile?.lud06 || recipientUser.profile?.lud16;
-      
-      if (!lnurl) {
-        console.log('❌ No LNURL found in profile, trying direct profile fetch...');
-        
-        // Try to get profile from a different approach
-        try {
-          // Get the hex pubkey properly
-          let hexpubkey;
-          if (typeof recipientUser.hexpubkey === 'function') {
-            hexpubkey = recipientUser.hexpubkey();
-          } else if (recipientUser.pubkey) {
-            hexpubkey = recipientUser.pubkey;
-          } else {
-            // Convert npub to hex pubkey
-            const { bech32 } = await import('@nostr-dev-kit/ndk');
-            hexpubkey = bech32.decode(recipientNpub).data;
-          }
-          
-          console.log('🔑 Using hexpubkey:', hexpubkey);
-          
-          const profileEvent = await ndk.fetchEvent({
-            kinds: [0],
-            authors: [hexpubkey]
-          });
-          
-          if (profileEvent) {
-            console.log('📋 Found profile event:', profileEvent);
-            const profileContent = JSON.parse(profileEvent.content);
-            console.log('📄 Profile content:', profileContent);
-            
-            const fallbackLnurl = profileContent.lud06 || profileContent.lud16;
-            if (fallbackLnurl) {
-              console.log('🔗 Found LNURL in fallback profile:', fallbackLnurl);
-              return await processLnurl(fallbackLnurl);
-            }
-          }
-        } catch (fallbackError) {
-          console.log('❌ Direct profile fetch failed:', fallbackError);
-        }
-        
-        throw new Error('No LNURL found in recipient profile or cached data');
-      }
 
-      console.log('🔗 Found LNURL:', lnurl);
-      return await processLnurl(lnurl);
-      
-    } catch (error) {
-      console.error('❌ Failed to get LNURL pay endpoint:', error);
-      // Include LNURL debugging info in the error
-      const debugInfo = {
-        lnurl: lnurl || 'Not found',
-        recipientNpub,
-        cachedFollow: cachedFollow ? 'Found' : 'Not found',
-        cachedLnurl: cachedFollow?.lud06 || cachedFollow?.lud16 || 'Not found'
-      };
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-  };
 
-  const processLnurl = async (lnurl) => {
-    console.log('🔗 Processing LNURL:', lnurl);
-    
-    let lnurlUrl;
-    
-    try {
-      // Check if it's a lightning address (lud16) - contains @ symbol
-      if (lnurl.includes('@')) {
-        console.log('⚡ Detected lightning address (lud16):', lnurl);
-        // Convert lightning address to LNURL format
-        const [username, domain] = lnurl.split('@');
-        lnurlUrl = `https://${domain}/.well-known/lnurlp/${username}`;
-        console.log('🔗 Converted to LNURL URL:', lnurlUrl);
-      } else {
-        // It's already a LNURL (lud06) - decode it
-        console.log('🔗 Detected LNURL (lud06):', lnurl);
-        const { bech32 } = await import('@nostr-dev-kit/ndk');
-        try {
-          const decoded = bech32.decode(lnurl);
-          lnurlUrl = new TextDecoder().decode(decoded.data);
-          console.log('🔗 Decoded LNURL URL:', lnurlUrl);
-        } catch (decodeError) {
-          console.error('❌ Failed to decode LNURL:', decodeError);
-          throw new Error(`Invalid LNURL format: ${decodeError.message}`);
-        }
-      }
-      
-      console.log('📡 Fetching LNURL endpoint...');
-      const lnurlResponse = await fetch(lnurlUrl);
-      
-      if (!lnurlResponse.ok) {
-        console.error('❌ LNURL endpoint returned error status:', lnurlResponse.status);
-        const errorText = await lnurlResponse.text();
-        console.error('📄 Error response:', errorText);
-        throw new Error(`LNURL endpoint returned ${lnurlResponse.status}: ${errorText}`);
-      }
-      
-      const responseText = await lnurlResponse.text();
-      console.log('📄 Raw LNURL response:', responseText);
-      
-      let lnurlData;
-      try {
-        lnurlData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('❌ Failed to parse LNURL response as JSON:', parseError);
-        console.error('📄 Response was:', responseText);
-        throw new Error(`LNURL endpoint returned invalid JSON: ${parseError.message}`);
-      }
-      
-      console.log('✅ LNURL data parsed:', lnurlData);
-      
-      // Validate required fields
-      if (!lnurlData.callback) {
-        throw new Error('LNURL response missing callback field');
-      }
-      
-      if (lnurlData.allowsNostr !== true) {
-        console.warn('⚠️ LNURL endpoint does not support Nostr zaps');
-      }
-      
-      return lnurlData;
-      
-    } catch (error) {
-      console.error('❌ Failed to process LNURL:', error);
-      // Include LNURL processing debugging info
-      const debugInfo = {
-        originalLnurl: lnurl,
-        lnurlUrl: lnurlUrl || 'Not generated',
-        isLightningAddress: lnurl.includes('@'),
-        domain: lnurl.includes('@') ? lnurl.split('@')[1] : 'N/A'
-      };
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-  };
 
-  const sendZapRequest = async (zapRequestEvent, lnurlData) => {
-    console.log('📤 Sending zap request to LNURL callback...');
-    
-    let callbackUrl, encodedEvent;
-    
-    try {
-      // Convert NDKEvent to plain object for JSON encoding
-      const eventData = {
-        id: zapRequestEvent.id,
-        pubkey: zapRequestEvent.pubkey,
-        created_at: zapRequestEvent.created_at,
-        kind: zapRequestEvent.kind,
-        tags: zapRequestEvent.tags,
-        content: zapRequestEvent.content,
-        sig: zapRequestEvent.sig
-      };
-      
-      console.log('📋 Event data for callback:', eventData);
-      
-      // Encode the zap request event
-      encodedEvent = encodeURIComponent(JSON.stringify(eventData));
-      
-      // Build callback URL with parameters
-      callbackUrl = `${lnurlData.callback}?amount=${zapRequestEvent.tags.find(t => t[0] === 'amount')[1]}&nostr=${encodedEvent}`;
-      
-      console.log('🔗 Callback URL:', callbackUrl);
 
-      // Send the request
-      const response = await fetch(callbackUrl);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-
-      console.log('📥 LNURL callback response:', result);
-
-      if (!result.pr) {
-        throw new Error('No payment request in response');
-      }
-
-      return result.pr; // Return the bolt11 invoice
-    } catch (error) {
-      console.error('❌ Failed to send zap request:', error);
-      // Include callback debugging info
-      const debugInfo = {
-        callbackUrl: callbackUrl || 'Not generated',
-        lnurlCallback: lnurlData?.callback || 'Not found',
-        amount: zapRequestEvent.tags.find(t => t[0] === 'amount')?.[1] || 'Not found',
-        encodedEvent: encodedEvent ? 'Generated' : 'Not generated'
-      };
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-  };
-
-  const payInvoice = async (invoice) => {
-    console.log('💳 Paying invoice via Bitcoin Connect...');
-    
-    try {
-      if (!bitcoinProvider || !bitcoinProvider.sendPayment) {
-        throw new Error('Bitcoin Connect provider not available');
-      }
-
-      console.log('📤 Sending payment...');
-      const result = await bitcoinProvider.sendPayment(invoice);
-      
-      console.log('✅ Payment successful:', {
-        preimage: result.preimage ? result.preimage.substring(0, 20) + '...' : 'null'
-      });
-
-      return result;
-    } catch (error) {
-      console.error('❌ Payment failed:', error);
-      // Include payment debugging info
-      const debugInfo = {
-        invoice: invoice ? 'Present' : 'Not provided',
-        invoiceLength: invoice?.length || 0,
-        hasBitcoinProvider: !!bitcoinProvider,
-        providerType: bitcoinProvider?.constructor?.name || 'Unknown'
-      };
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-  };
-
-  const performNip57Zap = async (recipientNpub, amountMsats = null) => {
+  const performLightningZap = async (lightningAddress, amountMsats = null) => {
     const zapAmount = amountMsats || settings.defaultZapAmount;
-    console.log('⚡ Starting NIP-57 zap process...');
-    console.log('🎯 Target:', recipientNpub);
-    console.log('💰 Amount:', zapAmount, 'msats');
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] Starting Lightning-tools zap process...`);
+    console.log(`[${timestamp}] Target:`, lightningAddress);
+    console.log(`[${timestamp}] Amount:`, zapAmount, 'msats');
 
     try {
-      // Step 1: Create zap request event
-      const zapRequestEvent = await createZapRequest(recipientNpub, zapAmount);
+      // Create Lightning-tools zapper
+      const { ln, targetUser, lightningAddress: resolvedAddress } = await createLightningZapper(lightningAddress, zapAmount);
       
-      // Step 2: Get LNURL pay endpoint
-      const lnurlData = await getLnurlPayEndpoint(recipientNpub);
+      // Log properties of the ln object
+      console.log(`[${timestamp}] LightningAddress object properties:`, {
+        lightningAddress: ln.lightningAddress,
+        lnurlpData: ln.lnurlpData,
+        keysendData: ln.keysendData,
+        hasLnurlpData: !!ln.lnurlpData,
+        hasKeysendData: !!ln.keysendData,
+        lnurlpDataKeys: ln.lnurlpData ? Object.keys(ln.lnurlpData) : null,
+        keysendDataKeys: ln.keysendData ? Object.keys(ln.keysendData) : null,
+        methods: Object.getOwnPropertyNames(Object.getPrototypeOf(ln)).filter(name => name !== 'constructor'),
+        allProperties: Object.keys(ln)
+      });
       
-      // Step 3: Send zap request to LNURL callback
-      const invoice = await sendZapRequest(zapRequestEvent, lnurlData);
+      // Check if we have a Bitcoin Connect provider for payments
+      if (!bitcoinProvider) {
+        throw new Error('No Bitcoin Connect provider available for payments');
+      }
+
+      // Get relays from NDK for Nostr integration
+      const relays = ndk?.relays ? Array.from(ndk.relays.values()).map(r => r.url) : ['wss://relay.damus.io'];
+      console.log(`[${timestamp}] Using relays:`, relays);
+
+      // Execute zap using lightning-tools with Bitcoin Connect
+      console.log(`[${timestamp}] Executing zap with Lightning-tools and Bitcoin Connect...`);
       
-      // Step 4: Pay the invoice
-      const paymentResult = await payInvoice(invoice);
+      const zapArgs = {
+        satoshi: Math.floor(zapAmount / 1000), // Convert msats to satoshis
+        comment: settings.defaultZapMessage,
+        relays: relays,
+        // Optional: target a specific event (we're zapping the user, not an event)
+        // e: "event_id_here"
+      };
+
+      // Generate zap invoice manually and pay with Bitcoin Connect
+      const invoice = await ln.zapInvoice(zapArgs); // generates a zap invoice
+      console.log(`[${timestamp}] Generated zap invoice:`, invoice.paymentRequest.substring(0, 20) + '...');
       
-      console.log('🎉 NIP-57 zap completed successfully!');
-      return paymentResult;
+      // Pay the invoice with Bitcoin Connect
+      if (!bitcoinProvider) {
+        throw new Error('No Bitcoin Connect provider available for payments');
+      }
+      
+      console.log(`[${timestamp}] Paying invoice via Bitcoin Connect...`);
+      const paymentResult = await bitcoinProvider.sendPayment(invoice.paymentRequest);
+      console.log(`[${timestamp}] Bitcoin Connect payment successful:`, {
+        preimage: paymentResult.preimage ? paymentResult.preimage.substring(0, 20) + '...' : 'null'
+      });
+      
+      // Payment is considered successful if Bitcoin Connect returns without error
+      // No need to verify payment status as Bitcoin Connect handles this
+      const response = {
+        preimage: paymentResult.preimage
+      };
+      
+      console.log(`[${timestamp}] Lightning-tools zap completed!`);
+      console.log(`[${timestamp}] Response:`, {
+        preimage: response.preimage ? response.preimage.substring(0, 20) + '...' : 'null',
+        success: !!response.preimage
+      });
+      
+      return {
+        success: !!response.preimage,
+        preimage: response.preimage,
+        lightningAddress: resolvedAddress,
+        targetUser
+      };
       
     } catch (error) {
-      console.error('💥 NIP-57 zap failed:', error);
+      console.error(`[${timestamp}] Lightning-tools zap failed:`, error);
       throw error;
     }
   };
@@ -501,9 +291,10 @@ export default function LightningApp() {
     return 'Unknown User';
   };
 
-  const handleLightningClick = () => {
-    console.log('⚡ Lightning icon clicked!');
-    console.log('🔍 Current state:', {
+    const handleLightningClick = () => {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] Lightning icon clicked!`);
+          console.log(`[${timestamp}] Current state:`, {
       isWalletConnected,
       hasBitcoinProvider: !!bitcoinProvider,
       followsCount: follows.length,
@@ -521,57 +312,68 @@ export default function LightningApp() {
 
     setLightningCount(prev => prev + 1);
 
-    // Get a random follow for zapping
-    const randomFollow = getRandomFollow();
-    if (!randomFollow) {
-      console.log('❌ No follows available for zapping');
-      showToast("No follows available to zap! ⚡");
+    // Use a random follow from the cached follows list
+    if (follows.length === 0) {
+      console.log(`[${timestamp}] No follows available for zapping`);
+      showToast("No follows available for zapping");
       return;
     }
+    
+    // Pick a random follow that has a LUD-16
+    const followsWithLud16 = follows.filter(follow => follow.lud16);
+    console.log(`[${timestamp}] Follows with LUD-16: ${followsWithLud16.length}/${follows.length}`);
+    
+    if (followsWithLud16.length === 0) {
+      console.log(`[${timestamp}] No follows with LUD-16 available for zapping`);
+      showToast("No follows with LUD-16 available for zapping");
+      return;
+    }
+    
+    const randomFollow = followsWithLud16[Math.floor(Math.random() * followsWithLud16.length)];
+    const lightningAddress = randomFollow.lud16 || randomFollow.lud06;
+    const displayName = randomFollow.displayName || randomFollow.name || 'Unknown User';
+    
+    console.log(`[${timestamp}] Selected random follow for zapping:`, {
+      npub: randomFollow.npub,
+      displayName: displayName,
+      lightningAddress: lightningAddress
+    });
 
-    const displayName = getDisplayNameForToast(randomFollow);
-    console.log('🎯 Selected follow for zapping:', displayName);
-
-    // Check if wallet is connected and ready for NIP-57 zapping
+    // Check if Bitcoin Connect wallet is connected and ready for Lightning-tools zapping
     if (isWalletConnected && bitcoinProvider) {
-      console.log('💰 Wallet connected and ready for NIP-57 zapping...');
-      console.log('🎯 Target:', displayName);
+      console.log(`[${timestamp}] Bitcoin Connect wallet ready for Lightning-tools zapping...`);
+      console.log(`[${timestamp}] Target:`, displayName);
       
       // Show immediate toast that zap is starting
       showToast(`You just zapped ${displayName}! ⚡`);
       
-      // Get the recipient's npub from the cached follow
-      const recipientNpub = randomFollow.npub;
-      if (!recipientNpub) {
-        console.log('❌ No npub found for follow:', randomFollow);
-        addZapLog(displayName, settings.defaultZapAmount, 'failed', 'No npub found');
-        return;
-      }
-      
-      console.log('✅ Got recipient npub:', recipientNpub);
-      
-      // Perform NIP-57 zap in the background using settings
-      performNip57Zap(recipientNpub)
+      // Perform Lightning-tools zap in the background using settings
+      performLightningZap(lightningAddress)
         .then((result) => {
-          console.log('✅ NIP-57 zap successful:', result);
-          addZapLog(displayName, settings.defaultZapAmount, 'success');
+          console.log(`[${timestamp}] Lightning-tools zap completed:`, result);
+          
+          // Consider zap successful if the process completed, regardless of preimage
+          addZapLog(displayName, settings.defaultZapAmount, 'success', null, {
+            message: 'Lightning-tools zap completed successfully',
+            preimage: result.preimage,
+            lightningAddress: result.lightningAddress,
+            hasPreimage: !!result.preimage
+          });
         })
         .catch((error) => {
-          console.error('❌ NIP-57 zap failed:', error);
-          console.error('🔍 Zap error details:', {
-            message: error.message,
-            stack: error.stack,
-            name: error.name
-          });
-          addZapLog(displayName, settings.defaultZapAmount, 'failed', error.message, error.debugInfo);
+          console.error(`[${timestamp}] Lightning-tools zap failed:`, error);
+          addZapLog(displayName, settings.defaultZapAmount, 'failed', error.message);
         });
     } else {
-      console.log('🎭 Demo mode - no wallet connected or provider not ready');
-      console.log('📊 Wallet status:', { isWalletConnected, hasBitcoinProvider: !!bitcoinProvider });
+      console.log(`[${timestamp}] Demo mode - no Bitcoin Connect wallet connected`);
+      console.log(`[${timestamp}] Wallet status:`, { 
+        isWalletConnected, 
+        hasBitcoinProvider: !!bitcoinProvider 
+      });
       
       // Show demo toast immediately
       showToast(`Demo mode: Would zap ${displayName}! ⚡`);
-      addZapLog(displayName, settings.defaultZapAmount, 'demo', 'Demo mode - no wallet connected');
+      addZapLog(displayName, settings.defaultZapAmount, 'demo', 'Demo mode - no Bitcoin Connect wallet connected');
     }
   };
 
@@ -601,6 +403,8 @@ export default function LightningApp() {
     setZapHistory(prev => [log, ...prev.slice(0, 49)]); // Keep last 50 logs
   };
 
+
+
   const handleSettingsChange = (newSettings) => {
     setSettings(newSettings);
     // Save to localStorage
@@ -609,14 +413,15 @@ export default function LightningApp() {
   };
 
   const handleWalletClick = () => {
-    console.log('👆 Wallet label clicked...');
-    console.log('📊 Current wallet state:', {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] Wallet label clicked...`);
+    console.log(`[${timestamp}] Current wallet state:`, {
       isWalletConnected,
       hasBitcoinProvider: !!bitcoinProvider
     });
     
     try {
-      console.log('🔗 Calling requestProvider() to open Bitcoin Connect modal...');
+      console.log(`[${timestamp}] Calling requestProvider() to open Bitcoin Connect modal...`);
       launchModal();
     } catch (error) {
       console.error('❌ Error requesting provider:', error);
@@ -734,7 +539,7 @@ export default function LightningApp() {
           transition={{ delay: 0.9 }}
           onClick={handleWalletClick}
         >
-          Wallet Connected: {isWalletConnected ? "YES" : "NO"}
+          Wallet: {window.webln ? "WebLN" : isWalletConnected ? "Bitcoin Connect" : "None"}
         </motion.div>
       </div>
 

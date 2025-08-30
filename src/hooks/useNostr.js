@@ -10,47 +10,15 @@ export function useNostr() {
   // Use ref to store NDK instance so it's immediately available
   const ndkRef = useRef(null)
 
-  // Initialize NDK with NIP-07 signer immediately
+  // Initialize NDK as singleton immediately
   useEffect(() => {
-    console.log('🔧 Initializing NDK with NIP-07 signer...')
-    
-    // Check if NIP-07 extension is available first
-    if (!window.nostr) {
-      console.log('⚠️ NIP-07 extension not detected - NDK will be initialized when user connects')
-      return
-    }
-    
-    try {
-      const nip07signer = new NDKNip07Signer()
-      const ndkInstance = new NDK({ 
-        signer: nip07signer,
-        explicitRelayUrls: [
-          'wss://relay.damus.io',
-          'wss://relay.primal.net',
-          'wss://relay.nostr.band'
-        ]
-      })
+    const initializeNDK = async () => {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] Initializing NDK singleton...`)
       
-      // Store in ref for immediate access
-      ndkRef.current = ndkInstance
-      console.log('✅ NDK initialized with NIP-07 signer and stored in ref')
-    } catch (error) {
-      console.log('⚠️ Failed to initialize NDK during startup:', error.message)
-      console.log('🔄 NDK will be initialized when user connects')
-    }
-  }, [])
-
-  const connect = async () => {
-    console.log('🔌 Connect function called')
-    
-    // Initialize NDK if not already done
-    if (!ndkRef.current) {
-      console.log('🔄 Initializing NDK on-demand...')
-      
-      // Check if NIP-07 extension is available
+      // Check if NIP-07 extension is available first
       if (!window.nostr) {
-        console.error('❌ NIP-07 extension not available')
-        alert('Please install a Nostr extension like Alby or nos2x to use this app.')
+        console.log(`[${timestamp}] NIP-07 extension not detected - NDK will be initialized when user connects`)
         return
       }
       
@@ -59,26 +27,67 @@ export function useNostr() {
         const ndkInstance = new NDK({ 
           signer: nip07signer,
           explicitRelayUrls: [
-            'wss://relay.damus.io',
-            'wss://nos.lol', 
-            'wss://relay.primal.net',
             'wss://relay.nostr.band'
-          ]
+          ],
+          enableOutboxModel: false,
+          enableNip46: false,
+          autoConnectUserRelays: false
         })
         
+        // Store singleton instance
         ndkRef.current = ndkInstance
-        console.log('✅ NDK initialized on-demand')
+        console.log(`[${timestamp}] NDK singleton initialized`)
+        
+        // Connect immediately as recommended in docs
+        console.log(`[${timestamp}] Connecting NDK singleton...`)
+        await ndkInstance.connect()
+        console.log(`[${timestamp}] NDK singleton connected successfully`)
+        
+        // Log all connected relays
+        if (ndkInstance.relays) {
+          console.log(`[${timestamp}] NDK connected relays:`, Array.from(ndkInstance.relays.values()).map(r => r.url))
+        }
       } catch (error) {
-        console.error('❌ Failed to initialize NDK:', error)
-        alert(`Failed to initialize Nostr connection: ${error.message}`)
-        return
+        console.error(`[${timestamp}] NDK singleton initialization error:`, error)
       }
+    }
+    
+    initializeNDK()
+  }, [])
+
+  const connect = async () => {
+    console.log('🔌 Connect function called')
+    
+    // Ensure NDK singleton is available
+    if (!ndkRef.current) {
+      console.error('❌ NDK singleton not available')
+      alert('NDK not initialized. Please refresh the page.')
+      return
     }
 
     try {
-      console.log('📡 Connecting to NDK...')
-      await ndkRef.current.connect()
-      console.log('✅ NDK connected')
+      console.log('📡 NDK should already be connected, verifying...')
+      if (!ndkRef.current.connected) {
+        console.log('⚠️ NDK not connected, connecting now...')
+        await ndkRef.current.connect()
+        console.log('✅ NDK connected')
+        // Check relays with safety
+        if (ndkRef.current.relays) {
+          console.log('🔗 Connected relays:', ndkRef.current.relays.size)
+          console.log('🔗 Relay URLs:', Array.from(ndkRef.current.relays.values()).map(r => r.url))
+        } else {
+          console.log('⚠️ Relays not yet available after connection')
+        }
+      } else {
+        console.log('✅ NDK already connected')
+        // Check relays with safety
+        if (ndkRef.current.relays) {
+          console.log('🔗 Connected relays:', ndkRef.current.relays.size)
+          console.log('🔗 Relay URLs:', Array.from(ndkRef.current.relays.values()).map(r => r.url))
+        } else {
+          console.log('⚠️ Relays not available in connected state')
+        }
+      }
       
       console.log('📡 Getting user from signer...')
       const signer = ndkRef.current.signer
@@ -418,10 +427,19 @@ export function useNostr() {
     }
   }, [])
 
+  // Check if NDK singleton is ready
+  const isNdkReady = () => {
+    return ndkRef.current && 
+           ndkRef.current.connected && 
+           ndkRef.current.relays && 
+           ndkRef.current.relays.size > 0;
+  };
+
   return {
     isConnected,
     pubkey,
-    ndk: ndkRef.current, // Expose the NDK instance from the ref
+    ndk: ndkRef.current, // Expose the singleton NDK instance
+    isNdkReady, // Expose the ready check function
     follows,
     isLoadingFollows,
     connect,

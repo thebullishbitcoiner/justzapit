@@ -1,4 +1,4 @@
-# Just Zap It ⚡
+# JustZapIt ⚡
 
 A lightning-fast web application with Nostr authentication and interactive lightning effects.
 
@@ -39,7 +39,7 @@ npm run dev
 
 ## Usage
 
-1. **Landing Page**: You'll see the beautiful "Just Zap It" landing page with a lightning icon and login button.
+1. **Landing Page**: You'll see the beautiful "JustZapIt" landing page with a lightning icon and login button.
 
 2. **Authentication**: Click "Login with Nostr" to connect with your Nostr extension.
 

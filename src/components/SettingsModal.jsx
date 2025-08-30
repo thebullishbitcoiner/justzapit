@@ -80,7 +80,7 @@ const SettingsModal = ({ isOpen, onClose, settings, onSettingsChange }) => {
                   defaultZapMessage: e.target.value
                 }))}
                 className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
-                placeholder="Just Zap It! ⚡"
+                placeholder="JustZapIt! ⚡"
                 maxLength="200"
               />
               <p className="text-xs text-gray-400 mt-1">
